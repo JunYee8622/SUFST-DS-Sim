@@ -49,6 +49,15 @@ lidarCfg.range    = 80;                      % sim range limit [m] (sensor: 200 
 lidarCfg.minRange = 0.3;                     % [m] (datasheet)
 lidarCfg.noiseStd = 0.02;                    % range noise [m] (datasheet: +/-2 cm)
 lidarCfg.mount    = [1.0 0 0.9];             % PLACEHOLDER [x fwd, y left, z up] in car frame [m]
+                                             % (only used by lidar_raycast / view_lidar_scan, NOT by the Simulink model)
+
+% Simulation 3D Lidar block (Unreal) in the Environment subsystem:
+% attached to the car's "Front bumper" mount point (block setting), plus an extra offset.
+lidarCfg.mountOffset = [0 0 0.10];           % extra [x fwd, y left, z up] from that point [m] - PLACEHOLDER, set from the CAD
+                                             % The bumper point is ~0.30 m above the ground and lies INSIDE the car mesh's
+                                             % collision shape: keep z >= 0.05 or every beam hits the car itself.
+                                             % Sensor height above ground = 0.30 + z.
+lidarCfg.rangeRes    = 0.004;                % [m] (datasheet: 4 mm step)
 P.lidar = lidarCfg;                          % same values, for reference
 
 % Start pose, taken from the track
