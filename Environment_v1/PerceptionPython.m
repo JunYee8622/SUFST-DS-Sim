@@ -1,7 +1,7 @@
 classdef PerceptionPython < matlab.System
     % PERCEPTIONPYTHON  Simulink block that runs the perception team's Python file.
     %
-    % Once per LiDAR scan the block calls   detect(points, intensity, ring)
+    % Once per LiDAR scan the block calls   detect(points, intensity, ring, timestamp, ego)
     % in the chosen .py file and turns the result into outputs:
     %
     %   nCones   number of cones detected
@@ -22,11 +22,12 @@ classdef PerceptionPython < matlab.System
         PythonFile   = 'perception/perception.py'  % path to the .py file
         FunctionName = 'detect'                    % function the block calls
         MaxCones     = 150                         % size of the cones output
+        Ts           = 0.1                         % scan period [s]
     end
 
     properties (Access = private)
         Fcn       % python function handle
-        NArgs     % how many arguments the python function takes (1..3)
+        NArgs     % how many arguments the python function takes (1..5)
     end
 
     methods (Access = protected)
@@ -86,13 +87,13 @@ classdef PerceptionPython < matlab.System
             obj.Fcn = py.getattr(mod, obj.FunctionName);
 
             nParams = double(py.len(py.inspect.signature(obj.Fcn).parameters));
-            obj.NArgs = min(max(nParams, 1), 3);
+            obj.NArgs = min(max(nParams, 1), 5);
             fprintf('PerceptionPython: %s.%s loaded (%d argument(s))\n', ...
                 modName, obj.FunctionName, obj.NArgs);
         end
 
         %% ----------------------------------------------------------- step
-        function [nCones, nLeft, nRight, nOther, cones] = stepImpl(obj, ptCloud, refl)
+        function [nCones, nLeft, nRight, nOther, cones] = stepImpl(obj, ptCloud, refl, pointTime, ego)
             [nRows, nCols, ~] = size(ptCloud);
             xyz = reshape(ptCloud, nRows * nCols, 3);
             ok  = all(isfinite(xyz), 2) & any(xyz ~= 0, 2);   % drop "no return"
@@ -107,6 +108,13 @@ classdef PerceptionPython < matlab.System
                 ringAll = repmat(int32(0:nRows-1)', 1, nCols);   % row index = channel
                 ringAll = reshape(ringAll, nRows * nCols, 1);
                 args{3} = PerceptionPython.toNumpy(ringAll(ok), 'int32', nnz(ok));
+            end
+            if obj.NArgs >= 4
+                tAll = single(reshape(pointTime, nRows * nCols, 1));
+                args{4} = PerceptionPython.toNumpy(tAll(ok), 'float32', nnz(ok));
+            end
+            if obj.NArgs >= 5
+                args{5} = PerceptionPython.toNumpy(double(ego(:)), 'float64', 3);
             end
 
             res = obj.Fcn(args{:});
@@ -145,14 +153,14 @@ classdef PerceptionPython < matlab.System
         end
 
         %% ------------------------------------------------- port / sizes
-        function num = getNumInputsImpl(~),  num = 2; end
+        function num = getNumInputsImpl(~),  num = 4; end
         function num = getNumOutputsImpl(~), num = 5; end
 
         function [n1, n2, n3, n4, n5] = getOutputNamesImpl(~)
             n1 = 'nCones'; n2 = 'nLeft'; n3 = 'nRight'; n4 = 'nOther'; n5 = 'cones';
         end
-        function [n1, n2] = getInputNamesImpl(~)
-            n1 = 'ptCloud'; n2 = 'reflectivity';
+        function [n1, n2, n3, n4] = getInputNamesImpl(~)
+            n1 = 'ptCloud'; n2 = 'reflectivity'; n3 = 'pointTime'; n4 = 'ego';
         end
 
         function [s1, s2, s3, s4, s5] = getOutputSizeImpl(obj)
@@ -167,6 +175,10 @@ classdef PerceptionPython < matlab.System
         end
         function [f1, f2, f3, f4, f5] = isOutputFixedSizeImpl(~)
             f1 = true; f2 = true; f3 = true; f4 = true; f5 = true;
+        end
+
+        function sts = getSampleTimeImpl(obj)
+            sts = createSampleTime(obj, 'Type', 'Discrete', 'SampleTime', obj.Ts);
         end
 
         function flag = supportsMultipleInstanceImpl(~)
@@ -203,7 +215,7 @@ classdef PerceptionPython < matlab.System
         function header = getHeaderImpl
             header = matlab.system.display.Header('PerceptionPython', ...
                 'Title', 'Perception (Python)', ...
-                'Text', ['Runs detect(points, intensity, ring) from your .py file on every ' ...
+                'Text', ['Runs detect(points, intensity, ring, timestamp, ego) from your .py file on every ' ...
                          'LiDAR scan. Path is relative to the project folder, or absolute.']);
         end
     end

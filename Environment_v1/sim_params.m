@@ -58,6 +58,18 @@ lidarCfg.mountOffset = [0 0 0.10];           % extra [x fwd, y left, z up] from 
                                              % collision shape: keep z >= 0.05 or every beam hits the car itself.
                                              % Sensor height above ground = 0.30 + z.
 lidarCfg.rangeRes    = 0.004;                % [m] (datasheet: 4 mm step)
+
+% Spinning-sweep physics (LiDAR Post-Processing block). A real LiDAR measures each
+% azimuth at a different time within the 0.1 s sweep while the car moves, so the
+% cloud is smeared at speed (1.5 m at 15 m/s). The Unreal block gives a snapshot;
+% the post-processing re-creates the smear from the car's speed and yaw rate.
+lidarCfg.motionDistortion = 1;               % 1 = on, 0 = off (clean snapshot)
+lidarCfg.scanStartAz = 180;                  % where each sweep starts [deg, 0 = front, +90 = left]. ASSUMPTION - set
+                                             % from the Hesai driver config (0 puts the tear in front of the car)
+lidarCfg.spinDir     = -1;                   % -1 = clockwise seen from above (Hesai), +1 = anticlockwise
+lidarCfg.refToSensor = [1.2 0];              % sensor position in the car frame, from the pose reference point [m]
+lidarCfg.poseLagScans = 1;              % MEASURED: Unreal delivers each LiDAR scan 1 scan period (0.1 s) after the
+                                             % pose it was taken at. The blocks use the pose from that many scans ago.
 P.lidar = lidarCfg;                          % same values, for reference
 
 % Start pose, taken from the track
@@ -98,4 +110,9 @@ fprintf('sim_params: track "%s" loaded (%d cones, %d other objects)\n', ...
 
 %% ===== 5. Vehicle dynamics =====    (later - from VD group)
 
-%% ===== 6. Evaluation =====          (later)
+%% ===== 6. Evaluation =====
+% Scoring of the perception output (Cone Scorer block). The scoreboard is shown and
+% saved to results/ at the end of every run.
+P.score.maxRange = 30;      % only cones within this distance of the sensor are scored [m]
+P.score.gate     = 0.5;     % a detection within this distance of a cone is a match [m]
+P.score.minHits  = 3;       % a cone counts only if the LiDAR hit it with this many points

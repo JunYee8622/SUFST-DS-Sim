@@ -7,7 +7,7 @@ the return format and nothing else in the model has to change.
 
 The block calls, once per LiDAR scan (10 Hz):
 
-    detect(points, intensity, ring)
+    detect(points, intensity, ring, timestamp, ego)
 
     points     (N, 3) float32  x forward, y left, z up [m], SENSOR frame.
                                Only valid returns (no NaN).
@@ -17,8 +17,18 @@ The block calls, once per LiDAR scan (10 Hz):
                                sim_params.m): 0 = top beam (+15 deg),
                                39 = bottom beam (-25 deg)
 
-    Declaring fewer arguments is fine: detect(points) and
-    detect(points, intensity) also work.
+    timestamp  (N,)   float32  when each point was measured within the 0.1 s
+                               sweep [s]. Like the real Hesai driver, the cloud is
+                               NOT corrected for the car's motion: a car at 15 m/s
+                               moves 1.5 m during the sweep, so points measured late
+                               are shifted. Use timestamp (and the car's speed) to
+                               de-skew if you want to.
+    ego        (3,)   float64  the car's velocity during the sweep, body frame:
+                               [vx forward m/s, vy left m/s, yaw rate rad/s] -
+                               what wheel-speed / IMU odometry gives.
+
+    Declaring fewer arguments is fine (detect(points), detect(points, intensity),
+    ... up to all five).
 
     returns    (M, 4) array / list of rows [x, y, z, cls] in the SENSOR frame
                (M may be 0). cls:  0 = left cone  (blue)
@@ -47,6 +57,12 @@ MAX_EXTENT = 0.60      # biggest cluster footprint accepted as a cone [m]
 MIN_HEIGHT = 0.08      # a cone cluster must stick up at least this far [m]
 MAX_HEIGHT = 0.60      # ... and no more than this [m]
 
+# Motion de-skew: a spinning LiDAR measures each point at a different time while the
+# car moves; at speed that smears the cloud. With the per-point timestamp and the
+# car's velocity we can move every point back to the sensor frame at the sweep start.
+DESKEW = True
+SENSOR_XY = (1.2, 0.0)   # sensor position in the car frame, from the pose reference [m]
+
 LEFT, RIGHT, ORANGE, UNKNOWN = 0, 1, 2, 3
 _NEIGHBOURS = [(i, j) for i in (-1, 0, 1) for j in (-1, 0, 1)]
 
@@ -60,8 +76,30 @@ def _ground_height(z):
     return 0.5 * (edges[k] + edges[k + 1])
 
 
-def detect(points, intensity=None, ring=None):
+def deskew(pts, t, ego, sensor_xy=SENSOR_XY):
+    """Re-express every point in the sensor frame at the start of the sweep."""
+    vx, vy, om = (float(v) for v in ego)
+    t = np.asarray(t, dtype=np.float64)
+    wt = om * t
+    c, s = np.cos(wt), np.sin(wt)
+    if abs(om) > 1e-6:
+        dx = (vx * s - vy * (1 - c)) / om
+        dy = (vx * (1 - c) + vy * s) / om
+    else:
+        dx, dy = vx * t, vy * t
+    # the sensor also swings round the car's reference point when the car yaws
+    dx = dx + (c - 1) * sensor_xy[0] - s * sensor_xy[1]
+    dy = dy + s * sensor_xy[0] + (c - 1) * sensor_xy[1]
+    out = pts.copy()
+    out[:, 0] = c * pts[:, 0] - s * pts[:, 1] + dx
+    out[:, 1] = s * pts[:, 0] + c * pts[:, 1] + dy
+    return out
+
+
+def detect(points, intensity=None, ring=None, timestamp=None, ego=None):
     pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    if DESKEW and timestamp is not None and ego is not None:
+        pts = deskew(pts, timestamp, ego)
     if pts.shape[0] < MIN_POINTS:
         return np.zeros((0, 4))
 
