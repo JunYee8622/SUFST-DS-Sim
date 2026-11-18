@@ -52,17 +52,20 @@ classdef LidarPostProcess < matlab.System
 
     methods (Access = protected)
         function setupImpl(obj)
-            obj.Hist = zeros(3, obj.PoseLag + 1);
+            obj.Hist = zeros(3, max(obj.PoseLag, 1) + 1);
             obj.HasHist = false;
         end
 
         function resetImpl(obj)
-            obj.Hist = zeros(3, obj.PoseLag + 1);
+            obj.Hist = zeros(3, max(obj.PoseLag, 1) + 1);
             obj.HasHist = false;
         end
 
         function [ptOut, reflOut, tPoint, ptRef, ego] = stepImpl(obj, pt, refl, pose)
             pose = double(pose(:));
+            assert(numel(pose) == 3, ['LidarPostProcess: input 3 "pose" must be a 3-element ' ...
+                'vector [x y yaw], but it has %d element(s). Wire the Pose Vector (Mux of ' ...
+                'x, y, yaw) output to this port.'], numel(pose));
             [nRow, nCol, ~] = size(pt);
 
             %% firing time of every column within the sweep
@@ -74,7 +77,7 @@ classdef LidarPostProcess < matlab.System
             % The scan in hand was taken at the OLDEST pose in the history (Unreal
             % delivers it PoseLag scans late); the car then moves to the next pose.
             if ~obj.HasHist
-                obj.Hist = repmat(pose, 1, obj.PoseLag + 1);
+                obj.Hist = repmat(pose, 1, max(obj.PoseLag, 1) + 1);
                 obj.HasHist = true;
             end
             obj.Hist = [obj.Hist(:, 2:end), pose];
