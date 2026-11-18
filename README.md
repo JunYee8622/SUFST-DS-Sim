@@ -54,6 +54,7 @@ Layer 1 of the Simulink model runs, and the code for the sensor model, ROS 2 out
 | ROS 2 output: pack scan into `sensor_msgs/PointCloud2` | `p40_pack_pointcloud2.m` (MATLAB Function block) | Written, not run |
 | Track library: acceleration, skidpad, 3 autocross, 1 trackdrive, with distractors | `generate_fs_tracks.m` → `tracks/*.csv` + `*_meta.mat` | Written by teammate |
 | Constant-speed driving path along the track centre | `track_to_path.m` | Written, not run |
+| Perception check: live camera view + score blocks, offline grader | `CameraViewer3D.m`, `PerceptionScore.m`, `add_perception_dashboard.m`, `perception/evaluate.py` | Blocks tested in MATLAB on a ray-cast scan and wired into a copy of the model (diagram updates); not yet run in a full Unreal simulation |
 | FSDS track import | Python export via the FSDS client | Idea only; worth an afternoon at most |
 
 ## Pandar40P sensor model
@@ -95,6 +96,37 @@ Each track also has spare cone stacks and timekeeping equipment beside it, so th
 
 - Run each track at about 5, 10 and 15 m/s, so speed-related effects show up in the results.
 - Keep skidpad near 8 m/s; 12 m/s would mean about 1.6 g, which a real FS car cannot do.
+
+## Seeing and scoring the perception code
+
+There are two ways to tell whether a `perception.py` is good. Both use the same scoring rules, so the numbers agree.
+
+**1. In the simulator (live).** Run `add_perception_dashboard` once with `fs_driverless_top_R2026a` open (it adds blocks, then save the model). It adds two blocks fed by the signals the Perception (Python) block already uses:
+
+| Block | File | What it does |
+| --- | --- | --- |
+| Camera View 3D | `CameraViewer3D.m` | Chase-camera view of the point cloud (behind and above the car, like the Unreal window). Detected cones are drawn as blue / yellow / orange 3D cone models. A live panel shows DETECTED, ON TRACK (true cones within 30 m, and how many the LiDAR actually hit), FOUND, MISSED and FALSE DETECTIONS |
+| Perception Score | `PerceptionScore.m` | Compares detections with the true cones every scan and, when the run stops, prints a report and stores it as `perceptionScoreReport` in the workspace |
+
+In the viewer: a **green ring** is a true cone that was found, a **red ring with a pin** is a cone the LiDAR saw but the detector missed, a **magenta pin** is a detection where there is no cone, and red dots are object returns that no detection claimed. The camera defaults (position, pitch, field of view) are read from the Scene Configuration block; `CameraPos` and `CameraPitch` on the block change them.
+
+**2. Offline, no MATLAB (what the perception team runs).** `Environment_v1/perception/evaluate.py` builds Pandar40P-like scans of the track library, runs `detect()` on each and prints a score table and a PASS / FAIL verdict (exit code 0 = pass, so it also works in CI).
+
+```
+cd Environment_v1/perception
+python evaluate.py                          # grade perception.py on every track
+python evaluate.py --file my_algorithm.py   # grade another file
+python evaluate.py --tracks skidpad -v      # one track, one line per scan
+```
+
+Pass marks are the `LIMITS` at the top of `evaluate.py`: recall ≥ 90 %, precision ≥ 90 %, mean position error ≤ 0.15 m, 95th-percentile run time ≤ 0.1 s (the LiDAR delivers 10 scans per second). These are starting values; agree them with the perception lead.
+
+Scoring rules (same in both places): a cone counts only if it is within 30 m and hit by at least 3 LiDAR points; detections are matched to those cones one-to-one with a 0.5 m gate; matched = TP, unmatched detection = FP, unmatched cone = FN. Colour accuracy is reported but not graded, because LiDAR alone cannot see colour. False positives that sit on a distractor (spare cone stack, timekeeping equipment) are counted separately.
+
+What the checks do and do not show:
+
+- The offline scans are idealised (flat ground, cones only, 2 cm range noise, no car body or dropout), so passing is necessary but not sufficient. The Simulink run is the more realistic check; real-car recordings come later.
+- Where the LiDAR sits relative to the pose point is not available from the Unreal mount, so `PerceptionScore` finds it from the first scan (x offset only; y is assumed 0). If almost no cone lines up at any offset it warns, which usually means mirrored Y or the wrong yaw units (open issues 2 and 3 below).
 
 ## Key decisions and why
 

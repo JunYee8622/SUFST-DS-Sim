@@ -37,14 +37,48 @@ classdef PerceptionPython < matlab.System
 
             pe = pyenv;
             if pe.Status == "NotLoaded"
+                % numpy's Intel OpenMP/MKL (libiomp5md.dll, e.g. from ArcGIS
+                % Pro's Python) clashes with MATLAB's own copy and abort()s
+                % MATLAB inside dgemm. Allow both runtimes to coexist. Must be
+                % set BEFORE Python is first loaded in this MATLAB session.
+                setenv('KMP_DUPLICATE_LIB_OK', 'TRUE');
+                % MATLAB can only pass arrays to Python 3.9-3.12 (libmwbuffer).
+                fallback = 'C:\Apps\Anaconda3\envs\soton-env\python.exe';
+                v = sscanf(char(pe.Version), '%d.%d');
+                if (numel(v) < 2 || v(1) ~= 3 || v(2) < 9 || v(2) > 12) ...
+                        && isfile(fallback)
+                    % No usable Python configured: select the known-good env
+                    % (allowed because Python is not loaded yet).
+                    pe = pyenv('Version', fallback);
+                    v = sscanf(char(pe.Version), '%d.%d');
+                end
+                if numel(v) < 2 || v(1) ~= 3 || v(2) < 9 || v(2) > 12
+                    error('PerceptionPython:pythonVersion', ...
+                        ['MATLAB is using Python "%s" (%s), which cannot exchange ' ...
+                         'arrays with MATLAB. Pick Python 3.9-3.12 with numpy, e.g. ' ...
+                         'pyenv(''Version'', ''%s'') then restart MATLAB.'], ...
+                        char(pe.Version), char(pe.Executable), strrep(fallback, '\', '\\'));
+                end
+            elseif ~strcmp(getenv('KMP_DUPLICATE_LIB_OK'), 'TRUE')
+                warning('PerceptionPython:pythonAlreadyLoaded', ...
+                    ['Python was loaded before KMP_DUPLICATE_LIB_OK was set; ' ...
+                     'MATLAB may crash in numpy. Restart MATLAB and run again.']);
+            end
+            if pe.Status == "NotLoaded"
                 fprintf('PerceptionPython: starting Python %s (%s)\n', ...
                     pe.Version, pe.Executable);
             end
             if count(py.sys.path, folder) == 0
-                insert(py.sys.path, int32(0), folder);
+                insert(py.sys.path, int32(0), folder);   % for the file's own imports
             end
-            mod = py.importlib.import_module(modName);
-            mod = py.importlib.reload(mod);          % pick up edits to the file
+            % Load the file by its exact path (fresh every run, so edits are
+            % picked up). import_module(modName) can instead return a stale or
+            % shadowing module of the same name (e.g. the "perception" folder
+            % seen as a namespace package) that has no detect().
+            py.importlib.invalidate_caches();
+            spec = py.importlib.util.spec_from_file_location(modName, file);
+            mod  = py.importlib.util.module_from_spec(spec);
+            spec.loader.exec_module(mod);
             if ~logical(py.hasattr(mod, obj.FunctionName))
                 error('PerceptionPython:noFunction', ...
                     'Function "%s" not found in %s', obj.FunctionName, file);
